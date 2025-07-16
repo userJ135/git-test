@@ -1,0 +1,1099 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>人员信息批量导入系统</title>
+    <link rel="stylesheet" href="__ADMIN__/daoru/styles.css">
+    <script src="__ADMIN__/daoru/jquery.js"></script>
+
+    <!-- 添加SheetJS库用于读取Excel文件 -->
+    <script src="__ADMIN__/daoru/xlsx.full.min.js"></script>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>人员信息批量导入系统</h1>
+            <!-- 上传文件信息显示 -->
+            <div id="fileInfo" class="file-info-header" style="display: none;">
+                <h4>文件信息</h4>
+                <p id="fileName"></p>
+                <p id="fileSize"></p>
+                <p id="uploadTime"></p>
+            </div>
+        </header>
+
+        <!-- 步骤导航 -->
+        <div class="steps-nav">
+            <button class="step-btn active" id="step1" data-step="1">
+                <span class="step-number">1</span>
+                <span class="step-text">下载模板</span>
+            </button>
+            <button class="step-btn" id="step2" data-step="2">
+                <span class="step-number">2</span>
+                <span class="step-text">上传表格</span>
+            </button>
+            <button class="step-btn disabled" id="step3" data-step="3">
+                <span class="step-number">3</span>
+                <span class="step-text">批量导入</span>
+            </button>
+        </div>
+
+        <!-- 操作区域 -->
+        <div class="operation-area">
+            <!-- 隐藏的文件输入 -->
+            <input type="file" id="fileInput" accept=".xlsx,.xls,.csv" style="display: none;">
+            <!-- 隐藏的宿舍ID输入，用于接收PHP后端传递的值 -->
+            <input type="hidden" name="hostel_id" value="{$hostel_id}" style="display: none;">
+        </div>
+
+        <!-- 数据预览和校验区域 -->
+        <div id="dataPreview" class="data-preview" style="display: none;">
+            <div class="preview-header">
+                <h3>数据预览与校验结果</h3>
+                <div class="validation-summary">
+                    <span class="valid-count">有效数据: <span id="validCount">0</span> 条</span>
+                    <span class="invalid-count">无效数据: <span id="invalidCount">0</span> 条</span>
+                </div>
+            </div>
+            
+            <!-- 校验结果筛选 -->
+            <div class="filter-buttons">
+                <button class="filter-btn" data-filter="all">全部数据</button>
+                <button class="filter-btn active" data-filter="valid">有效数据</button>
+                <button class="filter-btn" data-filter="invalid">无效数据</button>
+            </div>
+
+            <!-- 数据表格 -->
+            <div class="table-container">
+                <table id="dataTable">
+                    <thead>
+                        <tr>
+                            <th>状态</th>
+                            <th>序号</th>
+                            <th>姓名</th>
+                            <th>联系电话</th>
+                            <th>身份证号</th>
+                            <th>所在部门</th>
+                            <th>入住时间</th>
+                            <th>入住房间</th>
+                            <th>问题描述</th>
+                        </tr>
+                    </thead>
+                    <tbody id="dataTableBody">
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- 分页组件 -->
+            <div id="pagination" class="pagination" style="display: none;">
+                <button id="prevPage" class="page-btn">上一页</button>
+                <div class="page-numbers" id="pageNumbers"></div>
+                <button id="nextPage" class="page-btn">下一页</button>
+                <div class="page-info">
+                    第 <span id="currentPage">1</span> 页，共 <span id="totalPages">1</span> 页
+                </div>
+            </div>
+        </div>
+
+
+    </div>
+
+    <script>
+        // 从PHP后端获取宿舍ID变量
+        window.hostel_id = '{$hostel_id}';
+        
+        $(document).ready(function() {
+            let uploadedData = [];
+            let validationResults = [];
+            let filteredResults = []; // 当前筛选的结果
+            let currentPage = 1;
+            let pageSize = 5;
+            let currentFilter = 'valid';
+            
+            // 模板文件的标准列名（新的字段）
+            const TEMPLATE_COLUMNS = ['姓名', '联系电话', '身份证号', '所在部门', '入住时间', '入住房间'];
+            // 模板文件下载地址
+            const TEMPLATE_URL = 'https://zhsg.qianzhoukj.com/uploads/%E6%89%B9%E9%87%8F%E5%AF%BC%E5%85%A5%E4%BA%BA%E5%91%98%E4%BF%A1%E6%81%AF%E5%92%8C%E5%85%A5%E4%BD%8F%E4%BF%A1%E6%81%AF.xlsx';
+            
+            // 后端接口地址
+            const BATCH_VALIDATE_API = 'https://zhsg.qianzhoukj.com/admin/staff/Checkexcel/batch_validate';
+            const ADD_STAFF_API = 'https://zhsg.qianzhoukj.com/admin/staff/Checkexcel/add_staff';
+            
+            // 从PHP后端传递的变量获取宿舍ID
+            let HOSTEL_ID = null;
+            try {
+                // 获取PHP后端传递的hostel_id值
+                const hostelIdElement = document.querySelector('input[name="hostel_id"]');
+                if (hostelIdElement) {
+                    HOSTEL_ID = parseInt(hostelIdElement.value);
+                    console.log('从后端获取到宿舍ID:', HOSTEL_ID);
+                } else {
+                    // 如果没有隐藏input，尝试从window全局变量获取
+                    if (typeof window.hostel_id !== 'undefined') {
+                        HOSTEL_ID = parseInt(window.hostel_id);
+                        console.log('从全局变量获取到宿舍ID:', HOSTEL_ID);
+                    } else {
+                        console.error('未找到后端传递的hostel_id值');
+                    }
+                }
+            } catch (error) {
+                console.error('获取后端hostel_id失败:', error);
+            }
+            
+            // 后端校验配置（如果遇到CORS问题可以设置为false）
+            let ENABLE_BACKEND_VALIDATION = true;
+
+            // 初始化检查
+            initializeSystem();
+
+            // 初始化系统
+            function initializeSystem() {
+                if (!HOSTEL_ID) {
+                    // 如果没有获取到HOSTEL_ID，显示错误提示并禁用功能
+                    showNotification('错误：未获取到宿舍ID参数，请联系管理员检查后端配置！', 'error');
+                    
+                    // 禁用所有步骤按钮
+                    $('.step-btn').addClass('disabled');
+                    
+                    // 在页面上显示错误提示
+                    $('.container').prepend(`
+                        <div class="error-notice" style="background-color: #fee; border: 1px solid #f00; color: #c00; padding: 15px; margin-bottom: 20px; border-radius: 5px;">
+                            <h4 style="margin: 0 0 10px 0;">系统错误</h4>
+                            <p style="margin: 0;">未获取到宿舍ID参数，无法进行数据导入操作。</p>
+                            <p style="margin: 5px 0 0 0;"><strong>解决方法：</strong>请联系管理员确认后端控制器是否正确传递了 hostel_id 参数</p>
+                        </div>
+                    `);
+                    return;
+                } else {
+                    // 显示成功获取的宿舍ID
+                    // $('.container header').append(`
+                    //     <div class="hostel-info" style="background-color: #e8f5e8; border: 1px solid #4caf50; color: #2e7d32; padding: 10px; margin-top: 10px; border-radius: 5px;">
+                    //         <strong>当前宿舍ID：</strong>${HOSTEL_ID}
+                    //     </div>
+                    // `);
+                }
+            }
+
+            // 步骤按钮点击事件
+            $('.step-btn').click(function() {
+                if ($(this).hasClass('disabled')) {
+                    if (!HOSTEL_ID) {
+                        showNotification('系统缺少宿舍ID参数，请联系管理员！', 'error');
+                    }
+                    return;
+                }
+                
+                const step = $(this).data('step');
+                
+                switch(step) {
+                    case 1:
+                        // 下载模板
+                        downloadTemplate();
+                        break;
+                    case 2:
+                        // 上传文件
+                        $('#fileInput').click();
+                        break;
+                    case 3:
+                        // 批量导入
+                        if (!$(this).hasClass('disabled')) {
+                            performBatchImport();
+                        }
+                        break;
+                }
+                
+                // 更新步骤状态
+                updateStepStatus(step);
+            });
+
+            // 下载模板功能
+            function downloadTemplate() {
+                if (!HOSTEL_ID) {
+                    showNotification('系统缺少宿舍ID参数，请联系管理员！', 'error');
+                    return;
+                }
+                
+                // 直接从指定网址下载模板文件
+                const link = document.createElement('a');
+                link.href = TEMPLATE_URL;
+                link.download = '批量导入人员信息和入住信息.xlsx';
+                link.target = '_blank';
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                
+                // 显示下载成功提示
+                showNotification('正在下载模板文件...', 'success');
+                
+                // 激活步骤2
+                $('#step2').removeClass('disabled').addClass('active');
+            }
+
+            $('#fileInput').change(function(e) {
+                const file = e.target.files[0];
+                if (file) {
+                    handleFileUpload(file);
+                }
+            });
+
+            // 更新步骤状态
+            function updateStepStatus(currentStep) {
+                $('.step-btn').removeClass('active');
+                $(`#step${currentStep}`).addClass('active');
+            }
+
+            // 批量导入功能
+            async function performBatchImport() {
+                // 检查HOSTEL_ID
+                if (!HOSTEL_ID) {
+                    showNotification('错误：宿舍ID参数无效，无法进行导入操作！', 'error');
+                    return;
+                }
+
+                if (validationResults.length === 0) {
+                    showNotification('请先上传并校验数据！', 'error');
+                    return;
+                }
+
+                const validData = validationResults.filter(item => item.isValid);
+                if (validData.length === 0) {
+                    showNotification('没有有效数据可以导入！', 'error');
+                    return;
+                }
+
+                // 显示处理中状态
+                $('#step3').addClass('processing').text('导入中...');
+                
+                try {
+                                    // 准备发送到后端的数据
+                const staffData = validData.map(row => ({
+                        name: row.data.姓名,
+                        phone: row.data.联系电话,
+                    idCard: row.data.身份证号,
+                    department: row.data.所在部门,
+                    checkInTime: row.data.入住时间,
+                    room_sn: row.data.入住房间,
+                    hostelId: HOSTEL_ID
+                }));
+                
+                console.log('发送到后端的导入数据:', staffData);
+                console.log('数据类型检查:', Array.isArray(staffData), '数组长度:', staffData.length);
+
+                                    // 调用批量导入接口
+                const response = await $.ajax({
+                    url: ADD_STAFF_API,
+                    type: 'POST',
+                    contentType: 'application/json',
+                    dataType: 'json',
+                    data: JSON.stringify({
+                        staff_data: staffData  // 传递JSON格式的数组
+                    }),
+                    timeout: 15000 // 15秒超时
+                });
+
+                    if (response.success) {
+                        let message = response.message;
+                        
+                        // 显示详细的导入结果
+                        if (response.details && response.details.error_count > 0) {
+                            showNotification(message, 'warning');
+                            
+                            // 如果有错误详情，可以在控制台显示
+                            if (response.details.errors && response.details.errors.length > 0) {
+                                console.log('导入错误详情:', response.details.errors);
+                            }
+                        } else {
+                            showNotification(message, 'success');
+                        }
+                        
+                        // 清空表单
+                        resetUpload();
+                    } else {
+                        let errorMessage = response.message || '未知错误';
+                        
+                        // 如果有详细错误信息，显示更多内容
+                        if (response.details && response.details.errors && response.details.errors.length > 0) {
+                            errorMessage += '\n详细错误：\n' + response.details.errors.slice(0, 5).join('\n');
+                            if (response.details.errors.length > 5) {
+                                errorMessage += '\n...更多错误请查看控制台';
+                                console.log('所有导入错误:', response.details.errors);
+                            }
+                        }
+                        
+                        showNotification(`导入失败：${errorMessage}`, 'error');
+                    }
+                } catch (error) {
+                    console.error('导入错误:', error);
+                    
+                    // 详细的错误处理
+                    if (error.status === 0) {
+                        showNotification('网络连接失败或存在跨域问题，请联系管理员！', 'error');
+                    } else if (error.status >= 500) {
+                        showNotification('服务器内部错误，请稍后重试！', 'error');
+                    } else if (error.status === 404) {
+                        showNotification('导入接口不存在，请联系管理员！', 'error');
+                    } else if (error.status === 401 || error.status === 403) {
+                        showNotification('没有权限执行此操作，请联系管理员！', 'error');
+                    } else {
+                        showNotification(`导入失败 (${error.status})，请检查网络连接或联系管理员！`, 'error');
+                    }
+                } finally {
+                    $('#step3').removeClass('processing').html('<span class="step-number">3</span><span class="step-text">批量导入</span>');
+                }
+            }
+
+            // 筛选按钮功能
+            $('.filter-btn').click(function() {
+                $('.filter-btn').removeClass('active');
+                $(this).addClass('active');
+                
+                currentFilter = $(this).data('filter');
+                currentPage = 1; // 重置到第一页
+                updateFilteredResults();
+                initializePagination();
+                renderCurrentPage();
+            });
+
+            // 文件上传处理
+            function handleFileUpload(file) {
+                // 显示文件信息
+                $('#fileName').text(`文件名: ${file.name}`);
+                $('#fileSize').text(`文件大小: ${formatFileSize(file.size)}`);
+                $('#uploadTime').text(`上传时间: ${new Date().toLocaleString()}`);
+                $('#fileInfo').show();
+
+                // 读取文件内容
+                const reader = new FileReader();
+                reader.onload = async function(e) {
+                    try {
+                        let data;
+                        
+                        if (file.name.toLowerCase().endsWith('.csv')) {
+                            // 处理CSV文件
+                            data = parseCSV(e.target.result);
+                        } else {
+                            // 处理Excel文件
+                            const workbook = XLSX.read(e.target.result, { 
+                                type: 'array',
+                                cellDates: true,  // 自动转换日期
+                                dateNF: 'yyyy-mm-dd'  // 日期格式
+                            });
+                            const firstSheetName = workbook.SheetNames[0];
+                            const worksheet = workbook.Sheets[firstSheetName];
+                            
+                            // 使用带日期处理的转换
+                            const jsonData = XLSX.utils.sheet_to_json(worksheet, { 
+                                header: 1,
+                                raw: false,  // 不使用原始值，让SheetJS处理格式化
+                                dateNF: 'yyyy-mm-dd'  // 日期格式
+                            });
+                            
+                            // 转换为对象格式
+                            data = convertArrayToObjects(jsonData);
+                        }
+                        
+                        // 校验文件格式是否符合模板
+                        if (!validateTemplateFormat(data)) {
+                            showNotification('上传的文件格式不符合模板要求，请下载正确的模板文件！', 'error');
+                            resetUpload();
+                            return;
+                        }
+                        
+                        uploadedData = data;
+                        await validateData(data);
+                        
+                        // 激活步骤3
+                        updateStepStatus(2);
+                        
+                    } catch (error) {
+                        console.error('文件解析错误:', error);
+                        showNotification('文件解析失败，请检查文件格式！', 'error');
+                        resetUpload();
+                    }
+                };
+                
+                if (file.name.toLowerCase().endsWith('.csv')) {
+                    reader.readAsText(file, 'UTF-8');
+                } else {
+                reader.readAsArrayBuffer(file);
+                }
+            }
+
+            // 校验模板格式
+            function validateTemplateFormat(data) {
+                if (!data || data.length === 0) {
+                    return false;
+                }
+                
+                // 获取第一行数据的键名（表头）
+                const uploadedColumns = Object.keys(data[0]);
+                
+                // 检查是否包含所有必需的列
+                const missingColumns = TEMPLATE_COLUMNS.filter(col => !uploadedColumns.includes(col));
+                
+                if (missingColumns.length > 0) {
+                    console.error('缺少必需的列:', missingColumns);
+                    return false;
+                }
+                
+                return true;
+            }
+
+            // 将数组格式转换为对象格式
+            function convertArrayToObjects(arrayData) {
+                if (arrayData.length < 2) return [];
+                
+                const headers = arrayData[0];
+                const dataRows = arrayData.slice(1);
+                
+                return dataRows.map(row => {
+                    const obj = {};
+                    headers.forEach((header, index) => {
+                        let value = row[index] || '';
+                        
+                        // 特殊处理日期字段
+                        if (header === '入住时间' && value) {
+                            if (value instanceof Date) {
+                                // 如果已经是Date对象，格式化为YYYY-MM-DD
+                                value = value.getFullYear() + '-' + 
+                                       String(value.getMonth() + 1).padStart(2, '0') + '-' + 
+                                       String(value.getDate()).padStart(2, '0');
+                            }
+                        }
+                        
+                        obj[header] = value;
+                    });
+                    return obj;
+                }).filter(row => {
+                    // 过滤掉完全空白的行
+                    return Object.values(row).some(value => value && value.toString().trim() !== '');
+                });
+            }
+
+            // 解析CSV文件
+            function parseCSV(csvText) {
+                const lines = csvText.split('\n').filter(line => line.trim() !== '');
+                if (lines.length < 2) return [];
+                
+                const headers = lines[0].split(',').map(header => header.trim().replace(/"/g, ''));
+                const dataRows = lines.slice(1);
+                
+                return dataRows.map(line => {
+                    const values = line.split(',').map(value => value.trim().replace(/"/g, ''));
+                    const obj = {};
+                    headers.forEach((header, index) => {
+                        obj[header] = values[index] || '';
+                    });
+                    return obj;
+                }).filter(row => {
+                    // 过滤掉完全空白的行
+                    return Object.values(row).some(value => value && value.toString().trim() !== '');
+                });
+            }
+
+            // 重置上传状态
+            function resetUpload() {
+                $('#fileInput').val('');
+                $('#fileInfo').hide();
+                $('#dataPreview').hide();
+                uploadedData = [];
+                validationResults = [];
+                filteredResults = [];
+                currentPage = 1;
+                currentFilter = 'valid';
+                
+                // 重置步骤状态
+                $('.step-btn').removeClass('active disabled');
+                $('#step1').addClass('active');
+                $('#step2, #step3').addClass('disabled');
+            }
+
+            // 更新筛选结果
+            function updateFilteredResults() {
+                switch(currentFilter) {
+                    case 'valid':
+                        filteredResults = validationResults.filter(r => r.isValid);
+                        break;
+                    case 'invalid':
+                        filteredResults = validationResults.filter(r => !r.isValid);
+                        break;
+                    default:
+                        filteredResults = validationResults;
+                }
+            }
+
+            // 初始化分页
+            function initializePagination() {
+                updateFilteredResults();
+                const totalPages = Math.ceil(filteredResults.length / pageSize);
+                
+                if (totalPages <= 1) {
+                    $('#pagination').hide();
+                    return;
+                }
+                
+                $('#pagination').show();
+                $('#totalPages').text(totalPages);
+                renderPagination(totalPages);
+                
+                // 绑定分页事件
+                bindPaginationEvents();
+            }
+
+            // 渲染分页按钮
+            function renderPagination(totalPages) {
+                const pageNumbers = $('#pageNumbers');
+                pageNumbers.empty();
+                
+                // 计算显示的页码范围
+                let startPage, endPage;
+                if (totalPages <= 5) {
+                    startPage = 1;
+                    endPage = totalPages;
+                } else {
+                    if (currentPage <= 3) {
+                        startPage = 1;
+                        endPage = 5;
+                    } else if (currentPage >= totalPages - 2) {
+                        startPage = totalPages - 4;
+                        endPage = totalPages;
+                    } else {
+                        startPage = currentPage - 2;
+                        endPage = currentPage + 2;
+                    }
+                }
+                
+                // 添加首页
+                if (startPage > 1) {
+                    pageNumbers.append(`<span class="page-number" data-page="1">1</span>`);
+                    if (startPage > 2) {
+                        pageNumbers.append(`<span class="page-ellipsis">...</span>`);
+                    }
+                }
+                
+                // 添加中间页码
+                for (let i = startPage; i <= endPage; i++) {
+                    const activeClass = i === currentPage ? 'active' : '';
+                    pageNumbers.append(`<span class="page-number ${activeClass}" data-page="${i}">${i}</span>`);
+                }
+                
+                // 添加尾页
+                if (endPage < totalPages) {
+                    if (endPage < totalPages - 1) {
+                        pageNumbers.append(`<span class="page-ellipsis">...</span>`);
+                    }
+                    pageNumbers.append(`<span class="page-number" data-page="${totalPages}">${totalPages}</span>`);
+                }
+            }
+
+            // 绑定分页事件
+            function bindPaginationEvents() {
+                const totalPages = Math.ceil(filteredResults.length / pageSize);
+                
+                // 上一页
+                $('#prevPage').off('click').on('click', function() {
+                    if (currentPage > 1) {
+                        currentPage--;
+                        updatePagination();
+                    }
+                });
+                
+                // 下一页
+                $('#nextPage').off('click').on('click', function() {
+                    if (currentPage < totalPages) {
+                        currentPage++;
+                        updatePagination();
+                    }
+                });
+                
+                // 页码点击
+                $(document).off('click', '.page-number').on('click', '.page-number', function() {
+                    const page = parseInt($(this).data('page'));
+                    if (page !== currentPage) {
+                        currentPage = page;
+                        updatePagination();
+                    }
+                });
+                
+                // 更新按钮状态
+                $('#prevPage').prop('disabled', currentPage === 1);
+                $('#nextPage').prop('disabled', currentPage === totalPages);
+            }
+
+            // 更新分页显示
+            function updatePagination() {
+                const totalPages = Math.ceil(filteredResults.length / pageSize);
+                $('#currentPage').text(currentPage);
+                renderPagination(totalPages);
+                bindPaginationEvents();
+                renderCurrentPage();
+            }
+
+            // 渲染当前页数据
+            function renderCurrentPage() {
+                const tbody = $('#dataTableBody');
+                tbody.empty();
+
+                const startIndex = (currentPage - 1) * pageSize;
+                const endIndex = Math.min(startIndex + pageSize, filteredResults.length);
+                const currentPageData = filteredResults.slice(startIndex, endIndex);
+
+                currentPageData.forEach((validation, index) => {
+                    const row = validation.data;
+                    const tr = $('<tr>');
+                    
+                    if (validation.isValid) {
+                        tr.addClass('valid-row');
+                    } else {
+                        tr.addClass('invalid-row');
+                    }
+
+                    let statusIcon = '';
+                    if (!validation.isValid) {
+                        statusIcon = '<span class="status-invalid">✗</span>';
+                    } else {
+                        statusIcon = '<span class="status-valid">✓</span>';
+                    }
+
+                    // 使用原始数据的rowIndex作为序号，确保与全部数据的序号一致
+                    const originalIndex = validation.rowIndex + 1;
+
+                    const allMessages = validation.errors.join('; ');
+
+                    tr.html(`
+                        <td class="status-cell">${statusIcon}</td>
+                        <td class="index-cell">${originalIndex}</td>
+                        <td>${row.姓名 || ''}</td>
+                        <td>${row.联系电话 || ''}</td>
+                        <td>${row.身份证号 || ''}</td>
+                        <td>${row.所在部门 || ''}</td>
+                        <td>${row.入住时间 || ''}</td>
+                        <td>${row.入住房间 || ''}</td>
+                        <td class="error-cell">${allMessages}</td>
+                    `);
+
+                    tbody.append(tr);
+                });
+
+                // 如果没有数据，显示空状态
+                if (currentPageData.length === 0) {
+                    tbody.html(`
+                        <tr>
+                            <td colspan="9" style="text-align: center; padding: 20px; color: #666;">
+                                ${filteredResults.length === 0 ? '暂无数据' : '当前页无数据'}
+                            </td>
+                        </tr>
+                    `);
+                }
+            }
+
+            // 批量校验数据
+            async function batchValidateData(dataList) {
+                // 检查HOSTEL_ID
+                if (!HOSTEL_ID) {
+                    console.log('HOSTEL_ID无效，跳过后端校验');
+                    return [];
+                }
+
+                // 如果后端校验被禁用，直接返回空数组
+                if (!ENABLE_BACKEND_VALIDATION) {
+                    console.log('后端校验已禁用，跳过后端校验');
+                    return [];
+                }
+                
+                try {
+                    // 准备发送给后端的数据
+                    const requestData = {
+                        hostel_id: HOSTEL_ID,
+                        data_list: dataList.map(row => ({
+                            phone: row.联系电话.toString().trim(),
+                            idCard: row.身份证号.toString().trim(),
+                            depart_name: row.所在部门.toString().trim(),
+                            room_sn: row.入住房间.toString().trim()
+                        }))
+                    };
+                    
+                    console.log('发送到后端的校验数据:', requestData);
+                    console.log('房间号字段检查:', requestData.data_list.map((item, idx) => ({
+                        room_sn: item.room_sn,
+                        raw_room: dataList[idx]?.入住房间
+                    })));
+                    console.log('时间格式检查:', dataList.map((item, idx) => ({
+                        original: item.入住时间,
+                        formatted: requestData.data_list[idx] ? '后端数据已处理' : '未发送到后端'
+                    })));
+                    
+                    const response = await $.ajax({
+                        url: BATCH_VALIDATE_API,
+                        type: 'POST',
+                        contentType: 'application/json',
+                        dataType: 'json',
+                        data: JSON.stringify(requestData),
+                        timeout: 10000 // 10秒超时
+                    });
+                    
+                    // 返回每条数据的校验结果
+                    return response.data || [];
+                } catch (error) {
+                    console.error('批量校验失败:', error);
+                    
+                    // 详细的错误处理
+                    if (error.status === 0) {
+                        showNotification('检测到跨域问题，已自动禁用后端校验，仅进行前端校验', 'warning');
+                        ENABLE_BACKEND_VALIDATION = false; // 自动禁用后端校验
+                    } else if (error.status >= 500) {
+                        showNotification('服务器内部错误，将跳过后端校验', 'warning');
+                    } else if (error.status === 404) {
+                        showNotification('校验接口不存在，将跳过后端校验', 'warning');
+                    } else {
+                        showNotification(`校验请求失败 (${error.status})，将跳过后端校验`, 'warning');
+                    }
+                    
+                    // 网络错误时返回空数组，前端做基础校验
+                    return [];
+                }
+            }
+
+            // 前端重复数据检查
+            function checkDuplicateData(dataList) {
+                const phoneMap = new Map(); // 存储联系电话和对应的原始序号
+                const idCardMap = new Map(); // 存储身份证号和对应的原始序号
+                const duplicateInfo = [];
+
+                dataList.forEach((item, index) => {
+                    const phone = item.row.联系电话.toString().trim();
+                    const idCard = item.row.身份证号.toString().trim();
+                    // 使用原始数据的rowIndex作为显示序号
+                    const displayIndex = item.validation.rowIndex + 1;
+
+                    // 检查联系电话重复
+                    if (phoneMap.has(phone)) {
+                        const existingDisplayIndex = phoneMap.get(phone);
+                        duplicateInfo.push({
+                            index: index,
+                            type: 'phone',
+                            value: phone,
+                            duplicateWith: existingDisplayIndex,
+                            currentDisplayIndex: displayIndex
+                        });
+                        // 也标记之前的重复项
+                        const existingItemIndex = dataList.findIndex(item => (item.validation.rowIndex + 1) === existingDisplayIndex);
+                        if (existingItemIndex >= 0) {
+                            duplicateInfo.push({
+                                index: existingItemIndex,
+                                type: 'phone',
+                                value: phone,
+                                duplicateWith: displayIndex,
+                                currentDisplayIndex: existingDisplayIndex
+                            });
+                        }
+                    } else {
+                        phoneMap.set(phone, displayIndex);
+                    }
+
+                    // 检查身份证号重复
+                    if (idCardMap.has(idCard)) {
+                        const existingDisplayIndex = idCardMap.get(idCard);
+                        duplicateInfo.push({
+                            index: index,
+                            type: 'idCard',
+                            value: idCard,
+                            duplicateWith: existingDisplayIndex,
+                            currentDisplayIndex: displayIndex
+                        });
+                        // 也标记之前的重复项
+                        const existingItemIndex = dataList.findIndex(item => (item.validation.rowIndex + 1) === existingDisplayIndex);
+                        if (existingItemIndex >= 0) {
+                            duplicateInfo.push({
+                                index: existingItemIndex,
+                                type: 'idCard',
+                                value: idCard,
+                                duplicateWith: displayIndex,
+                                currentDisplayIndex: existingDisplayIndex
+                            });
+                        }
+                    } else {
+                        idCardMap.set(idCard, displayIndex);
+                    }
+                });
+
+                return duplicateInfo;
+            }
+
+            // 时间格式校验和转换函数
+            function validateAndFormatDate(dateValue) {
+                if (!dateValue) return { isValid: false, formattedDate: '', error: '入住时间不能为空' };
+                
+                let dateStr = dateValue.toString().trim();
+                
+                // 如果是Date对象，直接格式化
+                if (dateValue instanceof Date) {
+                    dateStr = dateValue.getFullYear() + '-' + 
+                             String(dateValue.getMonth() + 1).padStart(2, '0') + '-' + 
+                             String(dateValue.getDate()).padStart(2, '0');
+                }
+                // 如果是Excel数字格式的日期，转换为日期
+                else if (!isNaN(dateValue) && Number(dateValue) > 1) {
+                    try {
+                        // 使用标准的Excel日期转换算法
+                        // Excel日期从1900年1月1日开始计算（但有一个历史bug，认为1900年是闰年）
+                        const excelBaseDate = new Date(1900, 0, 1); // 1900-01-01
+                        const daysSince1900 = Number(dateValue) - 1; // 减去1因为Excel从1开始计数
+                        
+                        // 处理Excel的1900年闰年bug
+                        const adjustedDays = daysSince1900 > 59 ? daysSince1900 - 1 : daysSince1900;
+                        
+                        const date = new Date(excelBaseDate.getTime() + adjustedDays * 24 * 60 * 60 * 1000);
+                        dateStr = date.getFullYear() + '-' + 
+                                 String(date.getMonth() + 1).padStart(2, '0') + '-' + 
+                                 String(date.getDate()).padStart(2, '0');
+                    } catch (error) {
+                        console.error('日期转换错误:', error);
+                        return { 
+                            isValid: false, 
+                            formattedDate: dateStr, 
+                            error: '日期转换失败，请检查日期格式' 
+                        };
+                    }
+                }
+                
+                // 验证日期格式是否为 YYYY-MM-DD
+                const datePattern = /^\d{4}-\d{2}-\d{2}$/;
+                if (!datePattern.test(dateStr)) {
+                    return { 
+                        isValid: false, 
+                        formattedDate: dateStr, 
+                        error: '入住时间格式错误，请使用YYYY-MM-DD格式（如：2025-07-13）' 
+                    };
+                }
+                
+                // 验证日期是否有效
+                const parts = dateStr.split('-');
+                const year = parseInt(parts[0]);
+                const month = parseInt(parts[1]);
+                const day = parseInt(parts[2]);
+                
+                const date = new Date(year, month - 1, day);
+                if (date.getFullYear() !== year || 
+                    date.getMonth() !== month - 1 || 
+                    date.getDate() !== day) {
+                    return { 
+                        isValid: false, 
+                        formattedDate: dateStr, 
+                        error: '入住时间日期无效' 
+                    };
+                }
+                
+                return { isValid: true, formattedDate: dateStr, error: '' };
+            }
+
+            // 数据校验 - 优化版本，先前端后后端
+            async function validateData(data) {
+                validationResults = [];
+                const errors = {};
+
+                // 第1步：前端基础校验（字段不能为空）
+                showNotification('正在进行前端基础校验...', 'info');
+                
+                const basicValidData = [];
+                const requiredFields = ['姓名', '联系电话', '身份证号', '所在部门', '入住时间', '入住房间'];
+                
+                for (let index = 0; index < data.length; index++) {
+                    const row = data[index];
+                    const validation = {
+                        rowIndex: index,
+                        data: row,
+                        isValid: true,
+                        errors: []
+                    };
+
+                    // 校验所有字段都不能为空
+                    let hasEmptyField = false;
+                    for (const field of requiredFields) {
+                        if (!row[field] || row[field].toString().trim() === '') {
+                            validation.isValid = false;
+                            validation.errors.push(`${field}不能为空`);
+                            hasEmptyField = true;
+                        }
+                    }
+                    
+                    // 特殊校验：入住时间格式
+                    if (row['入住时间'] && row['入住时间'].toString().trim() !== '') {
+                        const originalDate = row['入住时间'];
+                        const dateValidation = validateAndFormatDate(row['入住时间']);
+                                                
+                        if (!dateValidation.isValid) {
+                            validation.isValid = false;
+                            validation.errors.push(dateValidation.error);
+                        } else {
+                            // 更新为格式化后的日期
+                            row['入住时间'] = dateValidation.formattedDate;
+                        }
+                    }
+
+                    if (hasEmptyField) {
+                        // 有空字段，记录错误
+                        validation.errors.forEach(error => {
+                            errors[error] = (errors[error] || 0) + 1;
+                        });
+                        validationResults.push(validation);
+                    } else {
+                        // 基础校验通过，加入批量校验队列
+                        basicValidData.push({ index, row, validation });
+                    }
+                }
+
+                // 第2步：前端重复数据检查
+                if (basicValidData.length > 0) {
+                    showNotification('正在检查重复数据...', 'info');
+                    
+                    const duplicateInfo = checkDuplicateData(basicValidData);
+                    
+                    // 处理重复数据错误
+                    duplicateInfo.forEach(duplicate => {
+                        const item = basicValidData[duplicate.index];
+                        if (item) {
+                            item.validation.isValid = false;
+                            const typeText = duplicate.type === 'phone' ? '联系电话' : '身份证号';
+                            item.validation.errors.push(`${typeText}与序号${duplicate.duplicateWith}的数据重复`);
+                        }
+                    });
+                }
+
+                // 前端校验完成后，等待一下再进行后端校验
+                await new Promise(resolve => setTimeout(resolve, 500));
+
+                // 第3步：批量后端校验（只校验前端有效的数据）
+                const frontendValidData = basicValidData.filter(item => item.validation.isValid);
+                
+                if (frontendValidData.length > 0) {
+                    showNotification('正在进行后端数据校验...', 'info');
+                    
+                    const dataForValidation = frontendValidData.map(item => item.row);
+                    const backendResults = await batchValidateData(dataForValidation);
+
+                    // 处理后端校验结果
+                    frontendValidData.forEach((item, idx) => {
+                        const backendResult = backendResults[idx];
+                        if (backendResult) {
+                            // 根据后端返回的结果设置错误信息
+                            if (!backendResult.staff_valid) {
+                                item.validation.isValid = false;
+                                item.validation.errors.push('该联系电话或身份证号已存在');
+                            }
+                            if (!backendResult.depart_valid) {
+                                item.validation.isValid = false;
+                                item.validation.errors.push('该部门不存在');
+                            }
+                            if (!backendResult.room_valid) {
+                                item.validation.isValid = false;
+                                // 如果有房间容量相关的错误信息，优先显示
+                                if (backendResult.room_capacity_msg) {
+                                    item.validation.errors.push(backendResult.room_capacity_msg);
+                                } else {
+                                    item.validation.errors.push('该房间不存在');
+                                }
+                            }
+                        } else if (!ENABLE_BACKEND_VALIDATION && item.validation.isValid) {
+                            // 如果后端校验被禁用，为通过前端校验的数据添加提示
+                            item.validation.errors.push('(未进行后端校验：联系电话、身份证号、部门、房间是否存在)');
+                        }
+
+                        // 统计错误
+                        item.validation.errors.forEach(error => {
+                            errors[error] = (errors[error] || 0) + 1;
+                        });
+                        validationResults.push(item.validation);
+                    });
+                }
+                
+                // 确保所有数据（包括前端校验失败的）都被添加到结果中
+                basicValidData.forEach(item => {
+                    if (!validationResults.find(v => v.rowIndex === item.validation.rowIndex)) {
+                        // 统计错误
+                        item.validation.errors.forEach(error => {
+                            errors[error] = (errors[error] || 0) + 1;
+                        });
+                        validationResults.push(item.validation);
+                    }
+                });
+
+                // 按原始顺序排序
+                validationResults.sort((a, b) => a.rowIndex - b.rowIndex);
+
+                // 更新界面
+                updateValidationSummary();
+                
+                // 重置筛选状态为"有效数据"
+                $('.filter-btn').removeClass('active');
+                $('.filter-btn[data-filter="valid"]').addClass('active');
+                currentFilter = 'valid';
+                currentPage = 1;
+                
+                initializePagination();
+                renderCurrentPage();
+
+                // 如果有有效数据且HOSTEL_ID有效，启用步骤3
+                const validCount = validationResults.filter(r => r.isValid).length;
+                if (validCount > 0 && HOSTEL_ID) {
+                    $('#step3').removeClass('disabled').addClass('active');
+                } else if (validCount > 0 && !HOSTEL_ID) {
+                    showNotification('有效数据校验完成，但由于后端未传递宿舍ID参数，无法启用批量导入功能', 'warning');
+                }
+                
+                // 等待一下再显示完成提示
+                await new Promise(resolve => setTimeout(resolve, 500));
+                showNotification('数据校验完成！', 'success');
+            }
+
+            // 更新校验汇总
+            function updateValidationSummary() {
+                const validCount = validationResults.filter(r => r.isValid).length;
+                const invalidCount = validationResults.filter(r => !r.isValid).length;
+                
+                $('#validCount').text(validCount);
+                $('#invalidCount').text(invalidCount);
+                $('#dataPreview').show();
+            }
+
+
+
+            // 格式化文件大小
+            function formatFileSize(bytes) {
+                if (bytes === 0) return '0 Bytes';
+                const k = 1024;
+                const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+                const i = Math.floor(Math.log(bytes) / Math.log(k));
+                return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+            }
+
+            // 显示通知 - 优化版本，避免重叠，支持多行
+            function showNotification(message, type = 'info') {
+                // 先移除现有的通知
+                $('.notification').remove();
+                
+                // 处理换行符
+                const formattedMessage = message.replace(/\n/g, '<br>');
+                
+                const notification = $(`
+                    <div class="notification ${type}" style="white-space: pre-line; max-width: 500px; line-height: 1.4;">
+                        ${formattedMessage}
+                    </div>
+                `);
+                
+                $('body').append(notification);
+                
+                // 根据消息类型调整显示时间
+                const displayTime = type === 'error' ? 6000 : (type === 'warning' ? 5000 : 3000);
+                
+                setTimeout(() => {
+                    notification.fadeOut(300, function() {
+                        $(this).remove();
+                    });
+                }, displayTime);
+            }
+        });
+    </script>
+</body>
+</html> 
