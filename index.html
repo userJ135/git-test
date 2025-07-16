@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>批量数据导入系统</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <h1>批量数据导入系统</h1>
+        
+        <!-- 文件上传区域 -->
+        <div class="upload-section">
+            <div class="upload-area" id="uploadArea">
+                <input type="file" id="fileInput" accept=".csv,.xlsx,.xls" multiple>
+                <div class="upload-text">
+                    <i class="upload-icon">📁</i>
+                    <p>点击或拖拽文件到此处上传</p>
+                    <p class="upload-hint">支持 CSV、Excel 文件格式</p>
+                </div>
+            </div>
+            <button class="btn btn-primary" id="uploadBtn">开始导入</button>
+        </div>
+
+        <!-- 进度提示 -->
+        <div class="progress-section" id="progressSection" style="display: none;">
+            <div class="progress-bar">
+                <div class="progress-fill" id="progressFill"></div>
+            </div>
+            <p id="progressText">正在处理...</p>
+        </div>
+
+        <!-- 结果表格 -->
+        <div class="table-section">
+            <div class="table-header">
+                <h2>导入结果</h2>
+                <div class="table-actions">
+                    <button class="btn btn-secondary" id="clearBtn">清空记录</button>
+                    <button class="btn btn-success" id="exportBtn">导出结果</button>
+                </div>
+            </div>
+            
+            <div class="table-container">
+                <table id="resultTable">
+                    <thead>
+                        <tr>
+                            <th>序号</th>
+                            <th>文件名</th>
+                            <th>状态</th>
+                            <th>处理时间</th>
+                            <th>成功记录</th>
+                            <th>失败记录</th>
+                            <th>错误信息</th>
+                            <th>操作</th>
+                        </tr>
+                    </thead>
+                    <tbody id="resultTableBody">
+                        <!-- 动态添加的结果行 -->
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- 统计信息 -->
+        <div class="stats-section">
+            <div class="stat-card">
+                <h3>总文件数</h3>
+                <span id="totalFiles">0</span>
+            </div>
+            <div class="stat-card success">
+                <h3>成功导入</h3>
+                <span id="successCount">0</span>
+            </div>
+            <div class="stat-card error">
+                <h3>失败导入</h3>
+                <span id="errorCount">0</span>
+            </div>
+            <div class="stat-card">
+                <h3>总记录数</h3>
+                <span id="totalRecords">0</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- 详情模态框 -->
+    <div class="modal" id="detailModal">
+        <div class="modal-content">
+            <span class="close" id="closeModal">&times;</span>
+            <h2>详细信息</h2>
+            <div id="modalBody"></div>
+        </div>
+    </div>
+
+    <script>
+        class DataImportManager {
+            constructor() {
+                this.fileInput = document.getElementById('fileInput');
+                this.uploadArea = document.getElementById('uploadArea');
+                this.uploadBtn = document.getElementById('uploadBtn');
+                this.progressSection = document.getElementById('progressSection');
+                this.progressFill = document.getElementById('progressFill');
+                this.progressText = document.getElementById('progressText');
+                this.resultTableBody = document.getElementById('resultTableBody');
+                this.clearBtn = document.getElementById('clearBtn');
+                this.exportBtn = document.getElementById('exportBtn');
+                this.detailModal = document.getElementById('detailModal');
+                this.closeModal = document.getElementById('closeModal');
+                this.modalBody = document.getElementById('modalBody');
+                
+                this.files = [];
+                this.results = [];
+                this.currentIndex = 0;
+                
+                this.initEventListeners();
+            }
+
+            initEventListeners() {
+                // 文件上传事件
+                this.fileInput.addEventListener('change', (e) => {
+                    this.handleFileSelect(e.target.files);
+                });
+
+                // 拖拽上传
+                this.uploadArea.addEventListener('dragover', (e) => {
+                    e.preventDefault();
+                    this.uploadArea.classList.add('drag-over');
+                });
+
+                this.uploadArea.addEventListener('dragleave', (e) => {
+                    e.preventDefault();
+                    this.uploadArea.classList.remove('drag-over');
+                });
+
+                this.uploadArea.addEventListener('drop', (e) => {
+                    e.preventDefault();
+                    this.uploadArea.classList.remove('drag-over');
+                    this.handleFileSelect(e.dataTransfer.files);
+                });
+
+                // 上传按钮
+                this.uploadBtn.addEventListener('click', () => {
+                    this.startImport();
+                });
+
+                // 清空按钮
+                this.clearBtn.addEventListener('click', () => {
+                    this.clearResults();
+                });
+
+                // 导出按钮
+                this.exportBtn.addEventListener('click', () => {
+                    this.exportResults();
+                });
+
+                // 模态框关闭
+                this.closeModal.addEventListener('click', () => {
+                    this.detailModal.style.display = 'none';
+                });
+
+                window.addEventListener('click', (e) => {
+                    if (e.target === this.detailModal) {
+                        this.detailModal.style.display = 'none';
+                    }
+                });
+            }
+
+            handleFileSelect(files) {
+                this.files = Array.from(files);
+                this.updateUploadAreaText();
+                this.uploadBtn.disabled = this.files.length === 0;
+            }
+
+            updateUploadAreaText() {
+                const uploadText = this.uploadArea.querySelector('.upload-text p');
+                if (this.files.length > 0) {
+                    uploadText.textContent = `已选择 ${this.files.length} 个文件`;
+                } else {
+                    uploadText.textContent = '点击或拖拽文件到此处上传';
+                }
+            }
+
+            async startImport() {
+                if (this.files.length === 0) {
+                    alert('请先选择文件');
+                    return;
+                }
+
+                this.uploadBtn.disabled = true;
+                this.progressSection.style.display = 'block';
+                this.currentIndex = 0;
+
+                for (let i = 0; i < this.files.length; i++) {
+                    const file = this.files[i];
+                    await this.processFile(file, i);
+                    this.updateProgress(i + 1, this.files.length);
+                }
+
+                this.uploadBtn.disabled = false;
+                this.progressSection.style.display = 'none';
+                this.updateStatistics();
+            }
+
+            async processFile(file, index) {
+                const startTime = new Date();
+                
+                try {
+                    // 模拟文件处理（这里应该替换为实际的服务器请求）
+                    const result = await this.simulateFileProcessing(file);
+                    
+                    const endTime = new Date();
+                    const processingTime = endTime - startTime;
+                    
+                    const resultData = {
+                        index: index + 1,
+                        filename: file.name,
+                        status: result.success ? 'success' : 'error',
+                        processingTime: `${processingTime}ms`,
+                        successCount: result.successCount,
+                        errorCount: result.errorCount,
+                        errorMessage: result.errorMessage || '',
+                        details: result.details || []
+                    };
+                    
+                    this.results.push(resultData);
+                    this.addResultRow(resultData);
+                    
+                } catch (error) {
+                    const endTime = new Date();
+                    const processingTime = endTime - startTime;
+                    
+                    const resultData = {
+                        index: index + 1,
+                        filename: file.name,
+                        status: 'error',
+                        processingTime: `${processingTime}ms`,
+                        successCount: 0,
+                        errorCount: 1,
+                        errorMessage: error.message,
+                        details: []
+                    };
+                    
+                    this.results.push(resultData);
+                    this.addResultRow(resultData);
+                }
+            }
+
+            async simulateFileProcessing(file) {
+                // 模拟异步处理
+                return new Promise((resolve) => {
+                    setTimeout(() => {
+                        // 模拟处理结果
+                        const isSuccess = Math.random() > 0.3; // 70%成功率
+                        const recordCount = Math.floor(Math.random() * 100) + 10;
+                        
+                        if (isSuccess) {
+                            const successCount = Math.floor(recordCount * 0.9);
+                            const errorCount = recordCount - successCount;
+                            
+                            resolve({
+                                success: true,
+                                successCount,
+                                errorCount,
+                                details: Array.from({length: recordCount}, (_, i) => ({
+                                    row: i + 1,
+                                    status: i < successCount ? 'success' : 'error',
+                                    data: `记录 ${i + 1}`
+                                }))
+                            });
+                        } else {
+                            resolve({
+                                success: false,
+                                successCount: 0,
+                                errorCount: 1,
+                                errorMessage: '文件格式不支持或内容有误'
+                            });
+                        }
+                    }, Math.random() * 2000 + 500); // 0.5-2.5秒随机延迟
+                });
+            }
+
+            addResultRow(data) {
+                const row = document.createElement('tr');
+                row.className = data.status === 'success' ? 'success-row' : 'error-row';
+                
+                const statusIcon = data.status === 'success' ? '✅' : '❌';
+                const statusText = data.status === 'success' ? '成功' : '失败';
+                
+                row.innerHTML = `
+                    <td>${data.index}</td>
+                    <td>${data.filename}</td>
+                    <td class="status-cell">
+                        <span class="status-icon">${statusIcon}</span>
+                        <span class="status-text">${statusText}</span>
+                    </td>
+                    <td>${data.processingTime}</td>
+                    <td>${data.successCount}</td>
+                    <td>${data.errorCount}</td>
+                    <td class="error-message">${data.errorMessage}</td>
+                    <td>
+                        <button class="btn btn-detail" onclick="importManager.showDetails(${data.index - 1})">
+                            详情
+                        </button>
+                    </td>
+                `;
+                
+                this.resultTableBody.appendChild(row);
+            }
+
+            updateProgress(current, total) {
+                const percentage = (current / total) * 100;
+                this.progressFill.style.width = `${percentage}%`;
+                this.progressText.textContent = `正在处理... ${current}/${total}`;
+            }
+
+            updateStatistics() {
+                const totalFiles = this.results.length;
+                const successCount = this.results.filter(r => r.status === 'success').length;
+                const errorCount = this.results.filter(r => r.status === 'error').length;
+                const totalRecords = this.results.reduce((sum, r) => sum + r.successCount + r.errorCount, 0);
+                
+                document.getElementById('totalFiles').textContent = totalFiles;
+                document.getElementById('successCount').textContent = successCount;
+                document.getElementById('errorCount').textContent = errorCount;
+                document.getElementById('totalRecords').textContent = totalRecords;
+            }
+
+            clearResults() {
+                this.results = [];
+                this.resultTableBody.innerHTML = '';
+                this.updateStatistics();
+            }
+
+            exportResults() {
+                if (this.results.length === 0) {
+                    alert('没有可导出的数据');
+                    return;
+                }
+
+                const csvContent = this.convertToCSV(this.results);
+                const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+                const link = document.createElement('a');
+                
+                if (link.download !== undefined) {
+                    const url = URL.createObjectURL(blob);
+                    link.setAttribute('href', url);
+                    link.setAttribute('download', `import_results_${new Date().toISOString().split('T')[0]}.csv`);
+                    link.style.visibility = 'hidden';
+                    document.body.appendChild(link);
+                    link.click();
+                    document.body.removeChild(link);
+                }
+            }
+
+            convertToCSV(data) {
+                const headers = ['序号', '文件名', '状态', '处理时间', '成功记录', '失败记录', '错误信息'];
+                const csvContent = [
+                    headers.join(','),
+                    ...data.map(row => [
+                        row.index,
+                        `"${row.filename}"`,
+                        row.status === 'success' ? '成功' : '失败',
+                        row.processingTime,
+                        row.successCount,
+                        row.errorCount,
+                        `"${row.errorMessage}"`
+                    ].join(','))
+                ].join('\n');
+                
+                return '\uFEFF' + csvContent; // 添加BOM以支持中文
+            }
+
+            showDetails(index) {
+                const result = this.results[index];
+                if (!result) return;
+                
+                let detailsHTML = `
+                    <h3>文件：${result.filename}</h3>
+                    <p><strong>状态：</strong>${result.status === 'success' ? '成功' : '失败'}</p>
+                    <p><strong>处理时间：</strong>${result.processingTime}</p>
+                    <p><strong>成功记录：</strong>${result.successCount}</p>
+                    <p><strong>失败记录：</strong>${result.errorCount}</p>
+                `;
+                
+                if (result.errorMessage) {
+                    detailsHTML += `<p><strong>错误信息：</strong>${result.errorMessage}</p>`;
+                }
+                
+                if (result.details && result.details.length > 0) {
+                    detailsHTML += '<h4>详细记录：</h4>';
+                    detailsHTML += '<div class="details-list">';
+                    result.details.forEach(detail => {
+                        const statusIcon = detail.status === 'success' ? '✅' : '❌';
+                        detailsHTML += `<div class="detail-item ${detail.status}">
+                            <span>${statusIcon}</span>
+                            <span>第${detail.row}行: ${detail.data}</span>
+                        </div>`;
+                    });
+                    detailsHTML += '</div>';
+                }
+                
+                this.modalBody.innerHTML = detailsHTML;
+                this.detailModal.style.display = 'block';
+            }
+        }
+
+        // 初始化
+        const importManager = new DataImportManager();
+    </script>
+</body>
+</html>
